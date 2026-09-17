@@ -3,11 +3,16 @@ import type { ModelMessage } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createInterface } from "node:readline/promises";
 import { weatherTool, calculatorTool } from "./tools/utility-tools";
-import { agentLoop } from "./agent/loop";
+import { agentLoop, BudgetState } from "./agent/loop";
 
 const tools = {
   get_weather: weatherTool,
   calculator: calculatorTool,
+};
+
+const budget: BudgetState = {
+  used: 0,
+  limit: 10000,
 };
 
 const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
@@ -48,12 +53,13 @@ async function main() {
       content: trimedQuery,
     });
 
-    await agentLoop(model, tools, messages, SYSTEM);
+    await agentLoop(model, tools, messages, SYSTEM, budget);
   }
 
   console.log("Bye!");
   rl.close();
 }
 
-console.log('Super Agent v0.2 — Agent Loop (type "exit" to quit)\n');
+console.log('Super Agent v0.3 — Fuses (type "exit" to quit)\n');
+console.log('试试输入："测试死循环"、"测试重试"、"测试预算" 看三层防护效果\n');
 await main();
