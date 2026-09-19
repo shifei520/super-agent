@@ -2,13 +2,21 @@ import "dotenv/config";
 import type { ModelMessage } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createInterface } from "node:readline/promises";
-import { weatherTool, calculatorTool } from "./tools/utility-tools";
+import { weatherTool, calculatorTool } from "./tools";
 import { agentLoop, BudgetState } from "./agent/loop";
+import { allTools } from "./tools";
+import { ToolRegistry } from "./tools/tool-registry";
 
-const tools = {
-  get_weather: weatherTool,
-  calculator: calculatorTool,
-};
+const toolRegistry = new ToolRegistry();
+toolRegistry.register(...allTools);
+console.log(`已注册 ${toolRegistry.getAll().length} 个工具：`);
+for (const tool of toolRegistry.getAll()) {
+  const flags = [
+    tool.isConcurrencySafe ? "可并发" : "串行",
+    tool.isReadOnly ? "只读" : "读写",
+  ].join(", ");
+  console.log(`  - ${tool.name}（${flags}）`);
+}
 
 const budget: BudgetState = {
   used: 0,
@@ -53,7 +61,7 @@ async function main() {
       content: trimedQuery,
     });
 
-    await agentLoop(model, tools, messages, SYSTEM, budget);
+    await agentLoop(model, toolRegistry, messages, SYSTEM, budget);
   }
 
   console.log("Bye!");

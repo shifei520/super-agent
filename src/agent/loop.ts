@@ -7,6 +7,7 @@ import {
   resetHistory,
 } from "./loop-detection.js";
 import { isRetryable, calculateDelay, sleep } from "./retry.js";
+import { ToolRegistry } from "../tools/tool-registry.js";
 
 const MAX_STEPS = 10;
 const MAX_RETRIES = 3;
@@ -18,7 +19,7 @@ export interface BudgetState {
 
 export const agentLoop = async (
   model: any,
-  tools: any,
+  toolRegistry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
   budget: BudgetState,
@@ -42,7 +43,7 @@ export const agentLoop = async (
           model,
           system,
           messages,
-          tools,
+          tools: toolRegistry.toAISDKFormat(),
           // DeepSeek V4 的 thinking 模式默认开启，且带 tools 时要求回传 reasoning_content，
           // 而 @ai-sdk/openai 不支持该字段 → 直接禁用 thinking 规避 400
           providerOptions: {
