@@ -45,7 +45,7 @@ async function main() {
   while (true) {
     let q: string;
     try {
-      q = await rl.question("请输入你的问题：");
+      q = await rl.question("You：");
     } catch {
       // stdin 关闭（EOF / Ctrl+D / 管道结束）时 question 会 reject，正常退出
       break;
@@ -69,5 +69,4 @@ async function main() {
 }
 
 console.log('Super Agent v0.3 — Fuses (type "exit" to quit)\n');
-console.log('试试输入："测试死循环"、"测试重试"、"测试预算" 看三层防护效果\n');
 await main();
