@@ -65,21 +65,55 @@ export const calculatorTool: ToolDefinition = {
 
 export const readFileTool: ToolDefinition = {
   name: "read_file",
-  description: "读取指定路径的文件内容",
+  description:
+    "读取指定路径的文件内容。支持 offset/limit 按行分页读取大文件：offset 为起始行号（从 1 开始），limit 为读取行数",
   isConcurrencySafe: true,
   isReadOnly: true,
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "文件路径" },
+      offset: {
+        type: "number",
+        description: "起始行号（从 1 开始），不指定则从文件开头读取",
+      },
+      limit: {
+        type: "number",
+        description: "读取的行数，不指定则读到文件末尾",
+      },
     },
     required: ["path"],
     additionalProperties: false,
   },
-  execute: async ({ path }: { path: string }) => {
-    return readFileSync(resolve(path), "utf-8");
+  execute: async ({
+    path,
+    offset,
+    limit,
+  }: {
+    path: string;
+    offset?: number;
+    limit?: number;
+  }) => {
+    const content = readFileSync(resolve(path), "utf-8");
+
+    // 未指定分页参数时直接返回全文（超长的部分由 maxResultChars 兜底截断）
+    if (offset === undefined && limit === undefined) {
+      return content;
+    }
+
+    const lines = content.split("\n");
+    const start = Math.max(0, (offset ?? 1) - 1);
+    const selected =
+      limit !== undefined ? lines.slice(start, start + limit) : lines.slice(start);
+
+    if (selected.length === 0) {
+      return `[文件共 ${lines.length} 行，起始行 ${start + 1} 超出范围]`;
+    }
+    // 附上位置信息，方便模型判断是否需要继续翻页
+    const header = `[文件共 ${lines.length} 行，本次返回第 ${start + 1}-${start + selected.length} 行]`;
+    return `${header}\n${selected.join("\n")}`;
   },
-  maxResultChars: 500,
+  maxResultChars: 50000,
 };
 
 export const writeFileTool: ToolDefinition = {
@@ -229,7 +263,7 @@ export const grepTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
-  maxResultChars: 3000,
+  maxResultChars: 30000,
   execute: async ({
     pattern,
     path = ".",
@@ -323,7 +357,7 @@ export const bashTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
-  maxResultChars: 3000,
+  maxResultChars: 30000,
   execute: async ({ command }: { command: string }) => {
     // 先检测环境是否支持 child_process
     try {
@@ -362,7 +396,7 @@ export const fetchUrlTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
-  maxResultChars: 1500,
+  maxResultChars: 15000,
   execute: async ({ url }: { url: string }) => {
     try {
       const res = await fetch(url, {

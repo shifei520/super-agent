@@ -1,6 +1,8 @@
 import { jsonSchema } from "ai";
 
-const DEFAULT_MAX_RESULT_CHARS = 3000;
+// 生产环境阈值：约 12.5k token（按 ~4 字符/token 估算），
+// 既给单文件阅读留足空间，又防止单次工具结果挤爆上下文
+const DEFAULT_MAX_RESULT_CHARS = 50000;
 
 const truncateResult = (
   text: string,
