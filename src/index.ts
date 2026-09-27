@@ -20,7 +20,7 @@ for (const tool of toolRegistry.getAll()) {
 
 const budget: BudgetState = {
   used: 0,
-  limit: 10000,
+  limit: 1000000,
 };
 
 const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
