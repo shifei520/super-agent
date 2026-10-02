@@ -104,7 +104,9 @@ export const readFileTool: ToolDefinition = {
     const lines = content.split("\n");
     const start = Math.max(0, (offset ?? 1) - 1);
     const selected =
-      limit !== undefined ? lines.slice(start, start + limit) : lines.slice(start);
+      limit !== undefined
+        ? lines.slice(start, start + limit)
+        : lines.slice(start);
 
     if (selected.length === 0) {
       return `[文件共 ${lines.length} 行，起始行 ${start + 1} 超出范围]`;
@@ -541,6 +543,8 @@ export const stopPreviewTool: ToolDefinition = {
   },
 };
 
+import { pickSearchTool, webFetchTool } from "./search-tools";
+
 export const allTools: ToolDefinition[] = [
   // weatherTool,
   // calculatorTool,
@@ -554,4 +558,6 @@ export const allTools: ToolDefinition[] = [
   fetchUrlTool,
   startPreviewTool,
   stopPreviewTool,
+  pickSearchTool(),
+  webFetchTool,
 ];

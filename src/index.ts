@@ -6,16 +6,47 @@ import { weatherTool, calculatorTool } from "./tools";
 import { agentLoop, BudgetState } from "./agent/loop";
 import { allTools } from "./tools";
 import { ToolRegistry } from "./tools/tool-registry";
+import { MCPClient } from "./tools/mcp-client";
 
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
-console.log(`已注册 ${toolRegistry.getAll().length} 个工具：`);
 for (const tool of toolRegistry.getAll()) {
   const flags = [
     tool.isConcurrencySafe ? "可并发" : "串行",
     tool.isReadOnly ? "只读" : "读写",
   ].join(", ");
   console.log(`  - ${tool.name}（${flags}）`);
+}
+
+async function connectMCP() {
+  const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+
+  let canSpawn = true;
+  try {
+    const { execSync } = await import("node:child_process");
+    execSync("echo test", { stdio: "ignore" });
+  } catch {
+    canSpawn = false;
+  }
+
+  if (githubToken && canSpawn) {
+    console.log("\n连接 GitHub MCP Server...");
+    try {
+      const client = new MCPClient(
+        "pnpm",
+        ["dlx", "@modelcontextprotocol/server-github"],
+        { GITHUB_PERSONAL_ACCESS_TOKEN: githubToken },
+      );
+      const tools = await toolRegistry.registerMCPServer("github", client);
+      console.log(`  已注册 ${tools.length} 个 MCP 工具`);
+      return;
+    } catch (err) {
+      console.log(
+        `  MCP 连接失败: ${err instanceof Error ? err.message : err}`,
+      );
+      console.log("  降级为 Mock MCP...");
+    }
+  }
 }
 
 const budget: BudgetState = {
@@ -34,14 +65,25 @@ const ds = createOpenAI({
 
 const model = ds.chat("deepseek-flash");
 
-const rl = createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
-const messages: ModelMessage[] = [];
-
 async function main() {
+  await connectMCP();
+  console.log(`\n已注册 ${toolRegistry.getAll().length} 个工具：`);
+  for (const tool of toolRegistry.getAll()) {
+    const isMCP = tool.name.startsWith("mcp__");
+    const flags = [
+      isMCP ? "MCP" : "内置",
+      tool.isConcurrencySafe ? "可并发" : "串行",
+    ].join(", ");
+    console.log(`  - ${tool.name}（${flags}）`);
+  }
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const messages: ModelMessage[] = [];
+
   while (true) {
     let q: string;
     try {
@@ -53,6 +95,8 @@ async function main() {
 
     const trimedQuery = q.trim();
     if (!trimedQuery || trimedQuery === "exit") {
+      rl.close();
+      await toolRegistry.closeAllMCP();
       break;
     }
 

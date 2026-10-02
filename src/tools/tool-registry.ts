@@ -1,4 +1,5 @@
 import { jsonSchema } from "ai";
+import { MCPClient } from "./mcp-client";
 
 // 生产环境阈值：约 12.5k token（按 ~4 字符/token 估算），
 // 既给单文件阅读留足空间，又防止单次工具结果挤爆上下文
@@ -38,6 +39,7 @@ export class ToolRegistry {
   private exclusiveLock = false; // 是否有排他锁，防止并行调用
   private concurrencyCount = 0; // 并发调用计数
   private waitQueue: Array<() => void> = []; // 阻塞等待中的 resolve 函数
+  private mcpClients: MCPClient[] = [];
 
   register(...tools: ToolDefinition[]) {
     tools.forEach((tool) => {
@@ -123,5 +125,44 @@ export class ToolRegistry {
       };
     });
     return result;
+  }
+
+  async registerMCPServer(serverName: string, client: MCPClient) {
+    await client.connect();
+    this.mcpClients.push(client);
+
+    const tools = await client.listTools();
+
+    const registered: string[] = [];
+
+    for (const tool of tools) {
+      const prefixedName = `mcp__${serverName}__${tool.name}`;
+      if (this.tools.has(prefixedName)) continue;
+
+      const originalName = tool.name;
+
+      this.register({
+        name: prefixedName,
+        description: `[MCP:${serverName}] ${tool.description}`,
+        parameters: tool.inputSchema as Record<string, unknown>,
+        isConcurrencySafe: true,
+        isReadOnly: true,
+        maxResultChars: 10000,
+        execute: async (input: any) => {
+          return client.callTool(originalName, input);
+        },
+      });
+
+      registered.push(prefixedName);
+    }
+
+    return registered;
+  }
+
+  async closeAllMCP(): Promise<void> {
+    for (const client of this.mcpClients) {
+      await client.close();
+    }
+    this.mcpClients = [];
   }
 }
