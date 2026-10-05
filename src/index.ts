@@ -246,10 +246,6 @@ const budget: BudgetState = {
   limit: 1000000,
 };
 
-const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
-需要查询信息时，主动使用工具，不要编造数据。
-回答要简洁直接。`;
-
 const ds = createOpenAI({
   baseURL: "https://api.deepseek.com",
   apiKey: process.env.DASHSCOPE_API_KEY,
@@ -277,10 +273,17 @@ async function main() {
     `  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟)`,
   );
 
+  const deferredSummary = toolRegistry.getDeferredToolSummary();
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
   });
+
+  const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
+你有内置工具和 MCP 工具可用。
+如果你需要的工具不在当前列表中，使用 tool_search 工具搜索可用工具。
+回答要简洁直接。${deferredSummary}`;
 
   const messages: ModelMessage[] = [];
 
