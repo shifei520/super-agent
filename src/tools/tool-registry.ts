@@ -32,6 +32,8 @@ export interface ToolDefinition {
   isConcurrencySafe?: boolean; // 能否并行调用
   isReadOnly?: boolean; // 是否只读
   maxResultChars?: number; // 最大返回字符数
+  shouldDefer?: boolean; // 是否延迟调用
+  searchHint?: string; // 搜索提示词，帮助 ToolSearch 匹配
 }
 
 export class ToolRegistry {
@@ -40,6 +42,7 @@ export class ToolRegistry {
   private concurrencyCount = 0; // 并发调用计数
   private waitQueue: Array<() => void> = []; // 阻塞等待中的 resolve 函数
   private mcpClients: MCPClient[] = [];
+  private discoveredTools: Set<string> = new Set();
 
   register(...tools: ToolDefinition[]) {
     tools.forEach((tool) => {
@@ -88,8 +91,74 @@ export class ToolRegistry {
     }
   }
 
+  searchTools(query: string): ToolDefinition[] {
+    const q = query.trim();
+    const results: ToolDefinition[] = [];
+
+    const names = query.includes(",")
+      ? q
+          .split(",")
+          .map((n) => n.trim())
+          .filter(Boolean)
+      : [query];
+
+    for (const name of names) {
+      const tool = this.tools.get(name);
+      if (tool && tool.name !== "tool_search") {
+        results.push(tool);
+        this.discoveredTools.add(tool.name);
+      }
+    }
+    return results;
+  }
+
+  getActiveTools(): ToolDefinition[] {
+    return this.getAll().filter((tool) => {
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  getDeferredToolSummary(): string {
+    const deferred = this.getAll().filter((tool) => {
+      return tool.shouldDefer && !this.discoveredTools.has(tool.name);
+    });
+
+    if (deferred.length === 0) return "";
+
+    const lines = deferred.map((t) => {
+      const hint = t.searchHint ? ` — ${t.searchHint}` : "";
+      return `  - ${t.name}${hint}`;
+    });
+
+    return `\n以下工具可用，但需要先通过 tool_search 搜索获取完整定义：\n${lines.join("\n")}`;
+  }
+  countTokenEstimate(): { active: number; deferred: number; total: number } {
+    let active = 0;
+    let deferred = 0;
+
+    for (const tool of this.tools.values()) {
+      const schemaSize = JSON.stringify({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }).length;
+      const tokens = Math.ceil(schemaSize / 4);
+
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        deferred += tokens;
+      } else {
+        active += tokens;
+      }
+    }
+
+    return { active, deferred, total: active + deferred };
+  }
+
   toAISDKFormat(): Record<string, any> {
-    const tools = this.getAll();
+    const tools = this.getActiveTools();
     const result: Record<string, any> = {};
     tools.forEach((tool: ToolDefinition) => {
       const isSafe = tool.isConcurrencySafe || false;
@@ -151,6 +220,8 @@ export class ToolRegistry {
         execute: async (input: any) => {
           return client.callTool(originalName, input);
         },
+        shouldDefer: true,
+        searchHint: `${serverName} ${tool.name} ${tool.description}`,
       });
 
       registered.push(prefixedName);
