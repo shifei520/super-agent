@@ -2,7 +2,6 @@ import "dotenv/config";
 import type { ModelMessage } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createInterface } from "node:readline/promises";
-import { weatherTool, calculatorTool } from "./tools";
 import { agentLoop, BudgetState } from "./agent/loop";
 import { allTools } from "./tools";
 import { ToolDefinition, ToolRegistry } from "./tools/tool-registry";
