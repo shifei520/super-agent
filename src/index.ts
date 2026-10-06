@@ -7,6 +7,14 @@ import { allTools } from "./tools";
 import { ToolDefinition, ToolRegistry } from "./tools/tool-registry";
 import { MCPClient } from "./tools/mcp-client";
 import { SessionStore } from "./session/store";
+import {
+  coreRules,
+  deferredTools,
+  PromptBuilder,
+  PromptContext,
+  sessionContext,
+  toolGuide,
+} from "./context/prompt-builder";
 
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
@@ -273,21 +281,15 @@ async function main() {
     `  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟)`,
   );
 
-  const deferredSummary = toolRegistry.getDeferredToolSummary();
-
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
-  const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
-你有内置工具和 MCP 工具可用。
-如果你需要的工具不在当前列表中，使用 tool_search 工具搜索可用工具。
-回答要简洁直接。${deferredSummary}`;
-
   // session持久化
   const isContinue = process.argv.includes("--continue");
-  const store = new SessionStore("default");
+  const sessionId = "default";
+  const store = new SessionStore(sessionId);
 
   let messages: ModelMessage[] = [];
   if (isContinue && store.exists()) {
@@ -296,6 +298,24 @@ async function main() {
   } else {
     console.log(`[Session] 新会话`);
   }
+
+  // Prompt Pipe 组装 system prompt
+  const builder = new PromptBuilder()
+    .pipe("coreRules", coreRules())
+    .pipe("toolGuide", toolGuide())
+    .pipe("deferredTools", deferredTools())
+    .pipe("sessionContext", sessionContext());
+
+  const promptCtx: PromptContext = {
+    toolCount: toolRegistry.getActiveTools().length,
+    deferredToolSummary: toolRegistry.getDeferredToolSummary(),
+    sessionMessageCount: messages.length,
+    sessionId,
+  };
+
+  const SYSTEM = builder.build(promptCtx);
+  // Debug: 显示 Prompt Pipe 各模块状态
+  builder.debug(promptCtx);
 
   while (true) {
     let q: string;
