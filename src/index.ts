@@ -6,6 +6,7 @@ import { agentLoop, BudgetState } from "./agent/loop";
 import { allTools } from "./tools";
 import { ToolDefinition, ToolRegistry } from "./tools/tool-registry";
 import { MCPClient } from "./tools/mcp-client";
+import { SessionStore } from "./session/store";
 
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
@@ -284,7 +285,17 @@ async function main() {
 如果你需要的工具不在当前列表中，使用 tool_search 工具搜索可用工具。
 回答要简洁直接。${deferredSummary}`;
 
-  const messages: ModelMessage[] = [];
+  // session持久化
+  const isContinue = process.argv.includes("--continue");
+  const store = new SessionStore("default");
+
+  let messages: ModelMessage[] = [];
+  if (isContinue && store.exists()) {
+    messages = store.load();
+    console.log(`[Session] 恢复会话，${messages.length} 条历史消息`);
+  } else {
+    console.log(`[Session] 新会话`);
+  }
 
   while (true) {
     let q: string;
@@ -302,12 +313,20 @@ async function main() {
       break;
     }
 
-    messages.push({
+    const userMsg: ModelMessage = {
       role: "user",
       content: trimedQuery,
-    });
+    };
 
+    messages.push(userMsg);
+    store.append(userMsg);
+
+    const beforeLen = messages.length;
     await agentLoop(model, toolRegistry, messages, SYSTEM, budget);
+
+    // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
+    const newMessages = messages.slice(beforeLen);
+    store.appendAll(newMessages);
   }
 
   console.log("Bye!");
