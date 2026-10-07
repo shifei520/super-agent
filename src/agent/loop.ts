@@ -7,6 +7,7 @@ import {
   resetHistory,
 } from "./loop-detection.js";
 import { isRetryable, calculateDelay, sleep } from "./retry.js";
+import { MODEL_CONTEXT_WINDOW } from "../context/config.js";
 import { microcompact, summarize } from "../context/compressor.js";
 import { applyDefense } from "../context/defense.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
@@ -15,10 +16,6 @@ const MAX_STEPS = 10;
 const MAX_RETRIES = 3;
 
 // ── 上下文压缩阈值 ────────────────────────────────────
-// 模型上下文窗口（token）。默认 deepseek-flash = 64k。
-// 可用环境变量 CONTEXT_WINDOW 覆盖（换模型或测试时调小以便快速触发压缩）。
-export const MODEL_CONTEXT_WINDOW =
-  Number(process.env.CONTEXT_WINDOW) || 1000000;
 // 触发压缩的占比：真实输入 token 超过窗口 80% 时启动 Layer 1
 const COMPRESS_THRESHOLD_RATIO = 0.8;
 // Layer 2 触发占比：microcompact 后仍超过窗口 92% 才上调用的 LLM 摘要

@@ -3,7 +3,7 @@ import {
   textToolResultTool,
   toolResultOutputToText,
 } from "./tool-result-output";
-import { MODEL_CONTEXT_WINDOW } from "../agent/loop";
+import { MODEL_CONTEXT_WINDOW } from "./config";
 
 function countMessageChars(message: ModelMessage): number {
   let chars = 0;
