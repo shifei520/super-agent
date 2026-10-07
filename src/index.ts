@@ -292,6 +292,9 @@ async function main() {
   const store = new SessionStore(sessionId);
 
   let messages: ModelMessage[] = [];
+  // 消息索引 → 创建毫秒时间戳（供 applyDefense 的 TTL 清理用）。
+  // 恢复的历史消息没有可靠时间戳，不记录即视为未知、永不被 TTL 清理。
+  const msgTimestamps = new Map<number, number>();
   if (isContinue && store.exists()) {
     messages = store.load();
     console.log(`[Session] 恢复会话，${messages.length} 条历史消息`);
@@ -339,10 +342,11 @@ async function main() {
     };
 
     messages.push(userMsg);
+    msgTimestamps.set(messages.length - 1, Date.now());
     store.append(userMsg);
 
     const beforeLen = messages.length;
-    await agentLoop(model, toolRegistry, messages, SYSTEM, budget);
+    await agentLoop(model, toolRegistry, messages, SYSTEM, budget, msgTimestamps);
 
     // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
     const newMessages = messages.slice(beforeLen);

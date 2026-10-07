@@ -8,6 +8,7 @@ import {
 } from "./loop-detection.js";
 import { isRetryable, calculateDelay, sleep } from "./retry.js";
 import { microcompact, summarize } from "../context/compressor.js";
+import { applyDefense } from "../context/defense.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
 
 const MAX_STEPS = 10;
@@ -16,7 +17,8 @@ const MAX_RETRIES = 3;
 // ── 上下文压缩阈值 ────────────────────────────────────
 // 模型上下文窗口（token）。默认 deepseek-flash = 64k。
 // 可用环境变量 CONTEXT_WINDOW 覆盖（换模型或测试时调小以便快速触发压缩）。
-const MODEL_CONTEXT_WINDOW = Number(process.env.CONTEXT_WINDOW) || 1000000;
+export const MODEL_CONTEXT_WINDOW =
+  Number(process.env.CONTEXT_WINDOW) || 1000000;
 // 触发压缩的占比：真实输入 token 超过窗口 80% 时启动 Layer 1
 const COMPRESS_THRESHOLD_RATIO = 0.8;
 // Layer 2 触发占比：microcompact 后仍超过窗口 92% 才上调用的 LLM 摘要
@@ -33,6 +35,8 @@ export const agentLoop = async (
   messages: ModelMessage[],
   system: string,
   budget: BudgetState,
+  // 消息索引 → 创建毫秒时间戳，供 applyDefense 的 TTL 清理判断 tool 结果新旧。
+  msgTimestamps: Map<number, number> = new Map(),
 ) => {
   resetHistory();
   for (let step = 1; step <= MAX_STEPS; step++) {
@@ -131,9 +135,26 @@ export const agentLoop = async (
     }
 
     // 流消费完后，把本轮产生的所有新消息（assistant 文本 + tool_call + tool_result）
-    // 从每个 step 里收集，写回历史
+    // 从每个 step 里收集，写回历史；同步为每条新消息盖上创建时间戳
+    const newMessages = stepsResult.flatMap((s) => s.response.messages);
+    const nowTs = Date.now();
+    const writeBase = messages.length;
+    messages.push(...newMessages);
+    for (let i = 0; i < newMessages.length; i++) {
+      msgTimestamps.set(writeBase + i, nowTs);
+    }
 
-    messages.push(...stepsResult.flatMap((s) => s.response.messages));
+    // ── 上下文防御（TTL 时间衰减清理，零成本，最先执行）──
+    // applyDefense 内部做 TTL 清理 + token 估算，返回处理后的新数组。
+    // 只替换 content、不增删消息，索引不变，故 msgTimestamps 无需调整。
+    const defense = applyDefense(messages, msgTimestamps);
+    if (defense.softPruned > 0 || defense.hardPruned > 0) {
+      messages.length = 0;
+      messages.push(...defense.messages);
+      console.log(
+        `  [防御·TTL] soft ${defense.softPruned} 条 / hard ${defense.hardPruned} 条，估算 ${defense.tokenEstimate} tokens`,
+      );
+    }
 
     // ── 上下文压缩（级联：先 Layer 1 本地清空，仍超阈值才 Layer 2 LLM 摘要）──
     // 判断依据用 API 返回的真实 inputTokens（含 system + tools schema + messages），
@@ -175,6 +196,16 @@ export const agentLoop = async (
       if (result.compressedCount > 0) {
         messages.length = 0;
         messages.push(...result.messages);
+        // 前 compressedCount 条被压成 1 条摘要（新索引 0），后续保留段整体前移。
+        // Map 是「索引 → 时间戳」，索引变了必须重建：摘要记当前时间，保留段重排。
+        const kept = new Map<number, number>();
+        kept.set(0, Date.now());
+        for (let oldIdx = result.compressedCount; oldIdx < msgTimestamps.size; oldIdx++) {
+          const ts = msgTimestamps.get(oldIdx);
+          if (ts !== undefined) kept.set(oldIdx - result.compressedCount + 1, ts);
+        }
+        msgTimestamps.clear();
+        for (const [k, v] of kept) msgTimestamps.set(k, v);
         console.log(
           `  [压缩·summary] 压缩 ${result.compressedCount} 条 → 1 条摘要`,
         );
