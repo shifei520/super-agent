@@ -16,6 +16,11 @@ import {
   toolGuide,
 } from "./context/prompt-builder";
 import { formatUsage, UsageTracker } from "./usage/tracker";
+import {
+  buildContextSnapshot,
+  renderContextView,
+  renderUsageView,
+} from "./context/view";
 
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
@@ -262,6 +267,12 @@ const ds = createOpenAI({
 
 const model = ds.chat("deepseek-flash");
 
+// /context 展示用的模型元信息
+const MODEL_ID = "deepseek-flash";
+const MODEL_NAME = "DeepSeek Flash";
+// DeepSeek 对话模型上下文窗口 64K tokens
+const MODEL_WINDOW_TOKENS = 64_000;
+
 async function main() {
   const usageTracker = new UsageTracker(".usage/today.jsonl");
   await connectMCP();
@@ -338,6 +349,24 @@ async function main() {
       break;
     }
 
+    // 斜杠命令：本地展示，不进对话历史、不调用模型
+    if (trimedQuery === "/context") {
+      const snapshot = buildContextSnapshot({
+        modelName: MODEL_NAME,
+        modelId: MODEL_ID,
+        windowTokens: MODEL_WINDOW_TOKENS,
+        systemPromptChars: SYSTEM.length,
+        toolTokens: toolRegistry.countTokenEstimate().active,
+        messages,
+      });
+      console.log(renderContextView(snapshot));
+      continue;
+    }
+    if (trimedQuery === "/usage") {
+      console.log(renderUsageView(usageTracker));
+      continue;
+    }
+
     const userMsg: ModelMessage = {
       role: "user",
       content: trimedQuery,
@@ -371,5 +400,8 @@ async function main() {
   rl.close();
 }
 
-console.log('Super Agent v0.3 — Fuses (type "exit" to quit)\n');
+console.log('Super Agent — Fuses (type "exit" to quit)');
+console.log("快捷命令：");
+console.log("  /context    — 终端里看 context 占用矩阵（参考 Claude Code）");
+console.log("  /usage      — 累计 token 用量、cache 命中率、节省金额");
 await main();
