@@ -11,6 +11,12 @@ import { MODEL_CONTEXT_WINDOW } from "../context/config.js";
 import { microcompact, summarize } from "../context/compressor.js";
 import { applyDefense } from "../context/defense.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
+import {
+  describePricing,
+  formatCost,
+  normalizeUsage,
+  type UsageTracker,
+} from "../usage/tracker.js";
 
 const MAX_STEPS = 10;
 const MAX_RETRIES = 3;
@@ -34,6 +40,8 @@ export const agentLoop = async (
   budget: BudgetState,
   // 消息索引 → 创建毫秒时间戳，供 applyDefense 的 TTL 清理判断 tool 结果新旧。
   msgTimestamps: Map<number, number> = new Map(),
+  // 用量/成本累计器。可选：不传则只跑业务、不做统计。
+  usageTracker?: UsageTracker,
 ) => {
   resetHistory();
   for (let step = 1; step <= MAX_STEPS; step++) {
@@ -107,10 +115,24 @@ export const agentLoop = async (
           }
         }
         stepsResult = await result.steps;
+        // v7 里 result.usage 已经是「本次调用所有 step 的合计」（totalUsage 已废弃），
+        // 计费口径用它；上下文占用必须用最后一步的 inputTokens，两者不能混用。
         stepUsage = await result.usage;
+
+        if (usageTracker) {
+          const norm = normalizeUsage(stepUsage);
+          const record = usageTracker.record(model.modelId, norm);
+          if (norm.cacheReadTokens > 0) {
+            console.log(
+              `\n\n  [缓存命中] 读取 ${norm.cacheReadTokens} tokens · 本步 ${formatCost(record.cost, record.currency)}`,
+            );
+          }
+        }
         break;
       } catch (error) {
-        if (attempt > MAX_RETRIES || !isRetryable(error)) {
+        // 最后一次尝试不再退避重试，直接抛错；否则 for 循环会静默退出，
+        // 本轮会当作"模型没有工具调用"结束，错误被吞掉、调用也不计入用量。
+        if (attempt === MAX_RETRIES - 1 || !isRetryable(error)) {
           throw error;
         }
         const delay = calculateDelay(attempt);
@@ -156,7 +178,9 @@ export const agentLoop = async (
     // ── 上下文压缩（级联：先 Layer 1 本地清空，仍超阈值才 Layer 2 LLM 摘要）──
     // 判断依据用 API 返回的真实 inputTokens（含 system + tools schema + messages），
     // 比本地字符估算准确，也不会漏掉 system/工具定义的开销。
-    // 本步的 stepUsage.inputTokens 反映"本次请求发送时"的上下文大小，用它判断
+    // 取「最后一步」的 usage 而不是 result.usage：v7 的 result.usage 是本次调用所有
+    // step 的合计，多 step 时会把窗口占用放大 N 倍、导致提前压缩。
+    // 最后一步的 inputTokens 反映"本次请求发送时"的上下文大小，用它判断
     // "下一步是否需要先压缩再发送"。上下文单调增长、每步重新判断，故一个 step 的
     // 统计滞后可接受（阈值已留 20% 缓冲）。
     const compressAt = Math.floor(
@@ -165,10 +189,9 @@ export const agentLoop = async (
     const summarizeAt = Math.floor(
       MODEL_CONTEXT_WINDOW * SUMMARIZE_THRESHOLD_RATIO,
     );
-    const contextTokens = stepUsage?.inputTokens ?? 0;
-    console.log();
+    const contextTokens = stepsResult.at(-1)?.usage.inputTokens ?? 0;
     console.log(
-      `  [上下文] 真实输入 ${contextTokens} tokens / 窗口 ${MODEL_CONTEXT_WINDOW} (micro@${compressAt}, summary@${summarizeAt})`,
+      `  [上下文] 真实输入 ${contextTokens} tokens / 窗口 ${MODEL_CONTEXT_WINDOW} (micro@${compressAt}, summary@${summarizeAt}) · 计费 ${describePricing(model.modelId)}`,
     );
 
     // Layer 1: microcompact（零成本，优先执行）
@@ -197,9 +220,14 @@ export const agentLoop = async (
         // Map 是「索引 → 时间戳」，索引变了必须重建：摘要记当前时间，保留段重排。
         const kept = new Map<number, number>();
         kept.set(0, Date.now());
-        for (let oldIdx = result.compressedCount; oldIdx < msgTimestamps.size; oldIdx++) {
+        for (
+          let oldIdx = result.compressedCount;
+          oldIdx < msgTimestamps.size;
+          oldIdx++
+        ) {
           const ts = msgTimestamps.get(oldIdx);
-          if (ts !== undefined) kept.set(oldIdx - result.compressedCount + 1, ts);
+          if (ts !== undefined)
+            kept.set(oldIdx - result.compressedCount + 1, ts);
         }
         msgTimestamps.clear();
         for (const [k, v] of kept) msgTimestamps.set(k, v);
@@ -209,12 +237,13 @@ export const agentLoop = async (
       }
     }
 
-    // 更新预算
+    // 更新预算：stepUsage.inputTokens 已含缓存命中的部分（inputTokens 是输入总量），
+    // 这里不要再单独加 cacheReadTokens，否则重复计数。
     const inputTokens = stepUsage?.inputTokens || 0;
     const outputTokens = stepUsage?.outputTokens || 0;
     budget.used += inputTokens + outputTokens;
     const pct = Math.round((budget.used / budget.limit) * 100);
-    console.log(`  [Token] ${budget.used}/${budget.limit} (${pct}%)`);
+    console.log(`\n  [Token] ${budget.used}/${budget.limit} (${pct}%)`);
     if (budget.used >= budget.limit) {
       console.log("\n[预算超支，强制停止]");
       break;

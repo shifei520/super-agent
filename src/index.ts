@@ -15,6 +15,7 @@ import {
   sessionContext,
   toolGuide,
 } from "./context/prompt-builder";
+import { formatUsage, UsageTracker } from "./usage/tracker";
 
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
@@ -262,6 +263,7 @@ const ds = createOpenAI({
 const model = ds.chat("deepseek-flash");
 
 async function main() {
+  const usageTracker = new UsageTracker(".usage/today.jsonl");
   await connectMCP();
 
   const simCount = registerSimulatedTools();
@@ -346,13 +348,25 @@ async function main() {
     store.append(userMsg);
 
     const beforeLen = messages.length;
-    await agentLoop(model, toolRegistry, messages, SYSTEM, budget, msgTimestamps);
+    const turnStart = usageTracker.stepCount;
+    await agentLoop(
+      model,
+      toolRegistry,
+      messages,
+      SYSTEM,
+      budget,
+      msgTimestamps,
+      usageTracker,
+    );
+
+    console.log(`  [用量·本轮] ${formatUsage(usageTracker.totals(turnStart))}`);
 
     // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
     const newMessages = messages.slice(beforeLen);
     store.appendAll(newMessages);
   }
 
+  console.log(`\n[用量·累计] ${formatUsage(usageTracker.totals())}`);
   console.log("Bye!");
   rl.close();
 }
