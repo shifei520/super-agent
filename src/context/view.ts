@@ -13,6 +13,8 @@ export interface ContextSlice {
   tokens: number;
   color: number; // ANSI 256 color code
   icon: string;
+  /** 图例里追加的补充说明，比如记忆条数 */
+  note?: string;
 }
 
 export interface ContextSnapshot {
@@ -27,6 +29,7 @@ export interface ContextSnapshot {
 
 const COLORS = {
   system: 63, // 紫
+  memory: 215, // 橙
   tools: 99, // 紫粉
   messages: 111, // 蓝
   free: 240, // 灰（空格子）
@@ -111,7 +114,8 @@ export function renderContextLegend(snapshot: ContextSnapshot): string {
     const dot = fg(s.color, "●");
     const label = `${s.icon} ${s.name}`;
     const value = `${fmtTokens(s.tokens)} tokens (${pct(s.tokens, windowTokens)})`;
-    lines.push(`${dot} ${label}: ${value}`);
+    const note = s.note ? `  ${fg(COLORS.dim, s.note)}` : "";
+    lines.push(`${dot} ${label}: ${value}${note}`);
   }
   const free = windowTokens - usedTokens - autocompactBufferTokens;
   lines.push(
@@ -148,6 +152,14 @@ export interface BuildSnapshotInput {
   windowTokens: number; // 比如 128_000
   /** system prompt 字符数（SYSTEM.length），内部按 CHARS_PER_TOKEN 折算 token */
   systemPromptChars: number;
+  /**
+   * 记忆段的字符数。记忆是通过 prompt pipe 注入 system prompt 的，
+   * 已经包含在 systemPromptChars 里，所以这里会从 system prompt 中扣除，
+   * 单独画一个切片，避免重复计算。
+   */
+  memoryChars?: number;
+  /** 记忆条数，仅用于图例补充说明 */
+  memoryCount?: number;
   /**
    * 活跃工具的 token 估算，直接取 toolRegistry.countTokenEstimate().active
    * （registry 内部已按 ~4 字符/token 折好，这里不再二次折算）
@@ -187,12 +199,26 @@ function approxMessageTokens(messages: ModelMessage[]): number {
 export function buildContextSnapshot(
   input: BuildSnapshotInput,
 ): ContextSnapshot {
+  // 记忆段寄生在 system prompt 里，先扣出来单独成一片
+  const memoryChars = Math.min(
+    Math.max(0, input.memoryChars ?? 0),
+    input.systemPromptChars,
+  );
+  const memoryCount = input.memoryCount ?? 0;
+
   const slices: ContextSlice[] = [
     {
       name: "System prompt",
-      tokens: approxTokensFromChars(input.systemPromptChars),
+      tokens: approxTokensFromChars(input.systemPromptChars - memoryChars),
       color: COLORS.system,
       icon: "◆",
+    },
+    {
+      name: "Memory",
+      tokens: approxTokensFromChars(memoryChars),
+      color: COLORS.memory,
+      icon: "✦",
+      note: `${memoryCount} 条记忆`,
     },
     {
       name: "System tools",

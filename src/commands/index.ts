@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import type { ToolRegistry } from "../tools/tool-registry";
 import type { UsageTracker } from "../usage/tracker";
+import { MemoryStore } from "../memory/store";
 
 /**
  * 斜杠命令的执行上下文——由 main 在每轮循环里提供。
@@ -20,6 +21,11 @@ export interface CommandContext {
   };
   /** 已构建好的 system prompt，用于估算其 token 占用 */
   systemPrompt: string;
+  /**
+   * 记忆存储。记忆段是通过 prompt pipe 注入 system prompt 的，
+   * 已经算在 systemPrompt 里，/context 会把它扣出来单独画一片。
+   */
+  memoryStore: MemoryStore;
 }
 
 /**

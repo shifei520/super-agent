@@ -15,6 +15,18 @@ export class PromptBuilder {
     return this;
   }
 
+  /**
+   * 逐个 pipe 求值，返回各段的字符数。
+   * /context 用它把 system prompt 拆成分类切片（尤其是记忆段），debug 也复用。
+   * 注意：pipe 会被重新执行一次，所以 pipe 内部不要有副作用。
+   */
+  sections(ctx: PromptContext): Array<{ name: string; chars: number }> {
+    return this.pipes.map(({ name, fn }) => {
+      const result = fn(ctx);
+      return { name, chars: result !== null ? result.length : 0 };
+    });
+  }
+
   build(ctx: PromptContext): string {
     const sections: string[] = [];
     for (const { fn } of this.pipes) {
@@ -29,9 +41,8 @@ export class PromptBuilder {
 
   debug(ctx: PromptContext): void {
     console.log("\n=== Prompt Pipe Debug ===");
-    for (const { name, fn } of this.pipes) {
-      const result = fn(ctx);
-      const status = result !== null ? `[ON] ${result.length} chars` : "[OFF]";
+    for (const { name, chars } of this.sections(ctx)) {
+      const status = chars > 0 ? `[ON] ${chars} chars` : "[OFF]";
       console.log(`  ${name}: ${status}`);
     }
     console.log("========================\n");

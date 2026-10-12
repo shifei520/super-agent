@@ -18,9 +18,17 @@ import {
 import { formatUsage, UsageTracker } from "./usage/tracker";
 import { createDispatcher, type CommandContext } from "./commands";
 import { contextCommands } from "./commands/context";
+import { MemoryStore } from "./memory/store";
+import { createMemoryTool } from "./tools/memory-tools";
+import { memoryCommands } from "./commands/memory";
 
+// ── Registry ────────────────────────────────
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
+toolRegistry.register(createToolSearchTool(toolRegistry));
+// ── Memory ────────────────────────────────
+const memoryStore = new MemoryStore('.')
+toolRegistry.register(createMemoryTool(memoryStore))
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -52,8 +60,6 @@ async function connectMCP() {
   }
 }
 
-toolRegistry.register(createToolSearchTool(toolRegistry));
-
 const budget: BudgetState = {
   used: 0,
   limit: 1000000,
@@ -69,8 +75,8 @@ const model = ds.chat("deepseek-flash");
 // /context 展示用的模型元信息
 const MODEL_ID = "deepseek-flash";
 const MODEL_NAME = "DeepSeek Flash";
-// DeepSeek 对话模型上下文窗口 64K tokens
-const MODEL_WINDOW_TOKENS = 64_000;
+// DeepSeek 对话模型上下文窗口 1000K tokens
+const MODEL_WINDOW_TOKENS = 1000_000;
 
 async function main() {
   const usageTracker = new UsageTracker(".usage/today.jsonl");
@@ -114,6 +120,7 @@ async function main() {
     .pipe("coreRules", coreRules())
     .pipe("toolGuide", toolGuide())
     .pipe("deferredTools", deferredTools())
+    .pipe('memoryContext', () => memoryStore.buildPromptSection())
     .pipe("sessionContext", sessionContext());
 
   const promptCtx: PromptContext = {
@@ -139,8 +146,9 @@ async function main() {
       windowTokens: MODEL_WINDOW_TOKENS,
     },
     systemPrompt: SYSTEM,
+    memoryStore,
   };
-  const dispatchCommand = createDispatcher([...contextCommands]);
+  const dispatchCommand = createDispatcher([...contextCommands, ...memoryCommands]);
 
   while (true) {
     let q: string;

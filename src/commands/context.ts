@@ -16,6 +16,9 @@ const contextHandler: CommandHandler = (cmd, ctx) => {
     modelId: ctx.model.id,
     windowTokens: ctx.model.windowTokens,
     systemPromptChars: ctx.systemPrompt.length,
+    // 记忆段寄生在 system prompt 内，单独扣出来画一片，避免重复计算
+    memoryChars: ctx.memoryStore.buildPromptSection().length,
+    memoryCount: ctx.memoryStore.list().length,
     toolTokens: ctx.toolRegistry.countTokenEstimate().active,
     messages: ctx.messages,
   });
