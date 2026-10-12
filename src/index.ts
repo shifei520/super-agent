@@ -3,8 +3,8 @@ import type { ModelMessage } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createInterface } from "node:readline/promises";
 import { agentLoop, BudgetState } from "./agent/loop";
-import { allTools } from "./tools";
-import { ToolDefinition, ToolRegistry } from "./tools/tool-registry";
+import { allTools, createToolSearchTool } from "./tools";
+import { ToolRegistry } from "./tools/tool-registry";
 import { MCPClient } from "./tools/mcp-client";
 import { SessionStore } from "./session/store";
 import {
@@ -16,11 +16,8 @@ import {
   toolGuide,
 } from "./context/prompt-builder";
 import { formatUsage, UsageTracker } from "./usage/tracker";
-import {
-  buildContextSnapshot,
-  renderContextView,
-  renderUsageView,
-} from "./context/view";
+import { createDispatcher, type CommandContext } from "./commands";
+import { contextCommands } from "./commands/context";
 
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
@@ -55,35 +52,7 @@ async function connectMCP() {
   }
 }
 
-const toolSearchTool: ToolDefinition = {
-  name: "tool_search",
-  description:
-    "加载延迟工具。传入工具名（从系统提示的延迟工具列表中选取），加载后即可在下一轮直接调用该工具",
-  parameters: {
-    type: "object",
-    properties: {
-      query: {
-        type: "string",
-        description:
-          '工具名，如 "mcp__github__list_issues"。支持逗号分隔多个工具名',
-      },
-    },
-    required: ["query"],
-    additionalProperties: false,
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  execute: async ({ query }: { query: string }) => {
-    const results = toolRegistry.searchTools(query);
-    if (results.length === 0) return `没有找到匹配 "${query}" 的工具`;
-    // 完整定义已通过 searchTools 的副作用注入 discoveredTools，
-    // 下一轮 toAISDKFormat() 会把这些工具作为一等公民工具交给模型，
-    // 这里只需轻量确认，避免在 tool_result 里重复 schema 浪费 token
-    const names = results.map((t) => t.name).join(", ");
-    return `已加载工具: ${names}。现在可以直接调用它们。`;
-  },
-};
-toolRegistry.register(toolSearchTool);
+toolRegistry.register(createToolSearchTool(toolRegistry));
 
 const budget: BudgetState = {
   used: 0,
@@ -158,6 +127,21 @@ async function main() {
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(promptCtx);
 
+  // 斜杠命令分发器：命中即本地处理，不进对话历史、不调用模型。
+  // 新增命令只需往 commands/ 下加 handler 并在此登记。
+  const commandCtx: CommandContext = {
+    messages,
+    toolRegistry,
+    usageTracker,
+    model: {
+      name: MODEL_NAME,
+      id: MODEL_ID,
+      windowTokens: MODEL_WINDOW_TOKENS,
+    },
+    systemPrompt: SYSTEM,
+  };
+  const dispatchCommand = createDispatcher([...contextCommands]);
+
   while (true) {
     let q: string;
     try {
@@ -174,21 +158,10 @@ async function main() {
       break;
     }
 
-    // 斜杠命令：本地展示，不进对话历史、不调用模型
-    if (trimedQuery === "/context") {
-      const snapshot = buildContextSnapshot({
-        modelName: MODEL_NAME,
-        modelId: MODEL_ID,
-        windowTokens: MODEL_WINDOW_TOKENS,
-        systemPromptChars: SYSTEM.length,
-        toolTokens: toolRegistry.countTokenEstimate().active,
-        messages,
-      });
-      console.log(renderContextView(snapshot));
-      continue;
-    }
-    if (trimedQuery === "/usage") {
-      console.log(renderUsageView(usageTracker));
+    // 斜杠命令：交给命令分发器，命中即本地处理，continue 下一轮
+    if (trimedQuery.startsWith("/")) {
+      if (dispatchCommand(trimedQuery, commandCtx)) continue;
+      console.log(`未知命令：${trimedQuery}`);
       continue;
     }
 
