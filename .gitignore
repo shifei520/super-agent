@@ -4,3 +4,5 @@ app
 .sessions/
 .usage/
 .memory/
+docs/
+knowledge.db

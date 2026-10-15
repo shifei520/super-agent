@@ -12,6 +12,7 @@ import {
   deferredTools,
   PromptBuilder,
   PromptContext,
+  ragContext,
   sessionContext,
   toolGuide,
 } from "./context/prompt-builder";
@@ -21,6 +22,9 @@ import { contextCommands } from "./commands/context";
 import { MemoryStore } from "./memory/store";
 import { createMemoryTool } from "./tools/memory-tools";
 import { memoryCommands } from "./commands/memory";
+import { SqliteVectorStore } from "./rag/sqlite-store";
+import { createDashScopeEmbedder } from "./rag/embedder";
+import { createRagTools } from "./tools/rag-tools";
 
 // ── Registry ────────────────────────────────
 const toolRegistry = new ToolRegistry();
@@ -29,6 +33,10 @@ toolRegistry.register(createToolSearchTool(toolRegistry));
 // ── Memory ────────────────────────────────
 const memoryStore = new MemoryStore('.')
 toolRegistry.register(createMemoryTool(memoryStore))
+// ── RAG ────────────────────────────────
+const vectorStore = new SqliteVectorStore('knowledge.db');
+const embedFn = createDashScopeEmbedder(process.env.QWEN_API_KEY!)
+toolRegistry.register(...createRagTools(vectorStore, embedFn));
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -121,6 +129,7 @@ async function main() {
     .pipe("toolGuide", toolGuide())
     .pipe("deferredTools", deferredTools())
     .pipe('memoryContext', () => memoryStore.buildPromptSection())
+    .pipe('ragContext', ragContext(vectorStore))
     .pipe("sessionContext", sessionContext());
 
   const promptCtx: PromptContext = {
