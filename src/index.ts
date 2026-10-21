@@ -109,15 +109,15 @@ async function main() {
 
   // session持久化
   const isContinue = process.argv.includes("--continue");
-  const sessionId = "default";
-  const store = new SessionStore(sessionId);
+  const sessionId = "default1";
+  const sessionStore = new SessionStore(sessionId);
 
   let messages: ModelMessage[] = [];
   // 消息索引 → 创建毫秒时间戳（供 applyDefense 的 TTL 清理用）。
   // 恢复的历史消息没有可靠时间戳，不记录即视为未知、永不被 TTL 清理。
   const msgTimestamps = new Map<number, number>();
-  if (isContinue && store.exists()) {
-    messages = store.load();
+  if (isContinue && sessionStore.exists()) {
+    messages = sessionStore.load();
     console.log(`[Session] 恢复会话，${messages.length} 条历史消息`);
   } else {
     console.log(`[Session] 新会话`);
@@ -156,6 +156,10 @@ async function main() {
     },
     systemPrompt: SYSTEM,
     memoryStore,
+    sessionStore,
+    budget,
+    msgTimestamps,
+    llm: model,
   };
   const dispatchCommand = createDispatcher([...contextCommands, ...memoryCommands]);
 
@@ -177,7 +181,7 @@ async function main() {
 
     // 斜杠命令：交给命令分发器，命中即本地处理，continue 下一轮
     if (trimedQuery.startsWith("/")) {
-      if (dispatchCommand(trimedQuery, commandCtx)) continue;
+      if (await dispatchCommand(trimedQuery, commandCtx)) continue;
       console.log(`未知命令：${trimedQuery}`);
       continue;
     }
@@ -189,7 +193,7 @@ async function main() {
 
     messages.push(userMsg);
     msgTimestamps.set(messages.length - 1, Date.now());
-    store.append(userMsg);
+    sessionStore.append(userMsg);
 
     const beforeLen = messages.length;
     const turnStart = usageTracker.stepCount;
@@ -207,7 +211,7 @@ async function main() {
 
     // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
     const newMessages = messages.slice(beforeLen);
-    store.appendAll(newMessages);
+    sessionStore.appendAll(newMessages);
   }
 
   console.log(`\n[用量·累计] ${formatUsage(usageTracker.totals())}`);

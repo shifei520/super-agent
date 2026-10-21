@@ -1,5 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { lintAll } from './validator';
 
 export interface MemoryEntry {
   name: string;
@@ -7,6 +8,8 @@ export interface MemoryEntry {
   type: 'user' | 'feedback' | 'project' | 'reference';
   content: string;
   filePath: string;
+  lastWriteAt?: number;
+  lastReadAt?: number;
 }
 
 const MEMORY_DIR = '.memory';
@@ -127,6 +130,10 @@ export class MemoryStore {
     return true;
   }
 
+  lint() {
+    return lintAll(this.list(), this.baseDir)
+  }
+
   private parseFrontmatter(raw: string): Omit<MemoryEntry, 'filePath'> | null {
     const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
     if (!match) return null;
@@ -147,6 +154,8 @@ export class MemoryStore {
       description: meta.description || '',
       type: meta.type as MemoryEntry['type'],
       content: match[2].trim(),
+      lastWriteAt: meta.lastWriteAt ? Number(meta.lastWriteAt) : undefined,
+      lastReadAt: meta.lastReadAt ? Number(meta.lastReadAt) : undefined,
     };
   }
 
@@ -171,8 +180,10 @@ export class MemoryStore {
       '记忆索引：',
       index,
       '',
-      '使用 memory 工具的 read 操作来读取具体记忆内容。',
-      '记忆是线索，不是事实——使用前先验证其准确性。',
+      '记忆使用原则：',
+      '- 记忆是线索，不是事实——使用前先用工具验证（read_file、grep 确认）',
+      '- 不存代码能推导的、git 能查的、文档已经写了的',
+      '- 只存对话中出现的、其他地方推导不出来的信息',
     ];
     return lines.join('\n');
   }
