@@ -11,6 +11,7 @@ import { globTool, grepTool } from "./file-search-tools";
 import { bashTool } from "./shell-tools";
 import { startPreviewTool, stopPreviewTool } from "./preview-tools";
 import { createToolSearchTool } from "./tool-search-tools";
+import { createSkillTool } from "./skills-tools";
 
 export const allTools: ToolDefinition[] = [
   // weatherTool,
@@ -29,5 +30,6 @@ export const allTools: ToolDefinition[] = [
 ];
 
 export {
-  createToolSearchTool
+  createToolSearchTool,
+  createSkillTool
 }

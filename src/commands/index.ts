@@ -23,6 +23,8 @@ export interface CommandContext {
   };
   /** 已构建好的 system prompt，用于估算其 token 占用 */
   systemPrompt: string;
+  /** 按当前运行时状态重新构建 system prompt（如 /<skill-name> 激活 skill 后需立即生效） */
+  rebuildSystemPrompt: () => string;
   /**
    * 记忆存储。记忆段是通过 prompt pipe 注入 system prompt 的，
    * 已经算在 systemPrompt 里，/context 会把它扣出来单独画一片。

@@ -3,7 +3,7 @@ import type { ModelMessage } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createInterface } from "node:readline/promises";
 import { agentLoop, BudgetState } from "./agent/loop";
-import { allTools, createToolSearchTool } from "./tools";
+import { allTools, createSkillTool, createToolSearchTool } from "./tools";
 import { ToolRegistry } from "./tools/tool-registry";
 import { MCPClient } from "./tools/mcp-client";
 import { SessionStore } from "./session/store";
@@ -25,11 +25,18 @@ import { memoryCommands } from "./commands/memory";
 import { SqliteVectorStore } from "./rag/sqlite-store";
 import { createDashScopeEmbedder } from "./rag/embedder";
 import { createRagTools } from "./tools/rag-tools";
+import { SkillLoader } from "./skills/loader";
+import { createSkillCommands } from "./commands/skills";
 
+// ── SKILL ────────────────────────────────
+const skillLoader = new SkillLoader(".")
+const loadedSkills = skillLoader.load();
+const activeSkills = new Set<string>();
 // ── Registry ────────────────────────────────
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
 toolRegistry.register(createToolSearchTool(toolRegistry));
+toolRegistry.register(createSkillTool(skillLoader, activeSkills));
 // ── Memory ────────────────────────────────
 const memoryStore = new MemoryStore('.')
 toolRegistry.register(createMemoryTool(memoryStore))
@@ -37,6 +44,7 @@ toolRegistry.register(createMemoryTool(memoryStore))
 const vectorStore = new SqliteVectorStore('knowledge.db');
 const embedFn = createDashScopeEmbedder(process.env.QWEN_API_KEY!)
 toolRegistry.register(...createRagTools(vectorStore, embedFn));
+
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -130,38 +138,24 @@ async function main() {
     .pipe("deferredTools", deferredTools())
     .pipe('memoryContext', () => memoryStore.buildPromptSection())
     .pipe('ragContext', ragContext(vectorStore))
+    .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
     .pipe("sessionContext", sessionContext());
 
-  const promptCtx: PromptContext = {
-    toolCount: toolRegistry.getActiveTools().length,
-    deferredToolSummary: toolRegistry.getDeferredToolSummary(),
-    sessionMessageCount: messages.length,
-    sessionId,
-  };
-
-  const SYSTEM = builder.build(promptCtx);
+  function makePromptCtx(): PromptContext {
+    return {
+      toolCount: toolRegistry.getActiveTools().length,
+      deferredToolSummary: toolRegistry.getDeferredToolSummary(),
+      sessionMessageCount: messages.length,
+      sessionId,
+    };
+  }
   // Debug: 显示 Prompt Pipe 各模块状态
-  builder.debug(promptCtx);
+  builder.debug(makePromptCtx());
 
   // 斜杠命令分发器：命中即本地处理，不进对话历史、不调用模型。
   // 新增命令只需往 commands/ 下加 handler 并在此登记。
-  const commandCtx: CommandContext = {
-    messages,
-    toolRegistry,
-    usageTracker,
-    model: {
-      name: MODEL_NAME,
-      id: MODEL_ID,
-      windowTokens: MODEL_WINDOW_TOKENS,
-    },
-    systemPrompt: SYSTEM,
-    memoryStore,
-    sessionStore,
-    budget,
-    msgTimestamps,
-    llm: model,
-  };
-  const dispatchCommand = createDispatcher([...contextCommands, ...memoryCommands]);
+
+  const dispatchCommand = createDispatcher([...contextCommands, ...memoryCommands, ...createSkillCommands(skillLoader, activeSkills),]);
 
   while (true) {
     let q: string;
@@ -179,8 +173,29 @@ async function main() {
       break;
     }
 
+    const SYSTEM = builder.build(makePromptCtx());
+
+
     // 斜杠命令：交给命令分发器，命中即本地处理，continue 下一轮
     if (trimedQuery.startsWith("/")) {
+      const commandCtx: CommandContext = {
+        messages,
+        toolRegistry,
+        usageTracker,
+        model: {
+          name: MODEL_NAME,
+          id: MODEL_ID,
+          windowTokens: MODEL_WINDOW_TOKENS,
+        },
+        systemPrompt: SYSTEM,
+        rebuildSystemPrompt: () => builder.build(makePromptCtx()),
+        memoryStore,
+        sessionStore,
+        budget,
+        msgTimestamps,
+        llm: model,
+      };
+
       if (await dispatchCommand(trimedQuery, commandCtx)) continue;
       console.log(`未知命令：${trimedQuery}`);
       continue;
@@ -223,4 +238,9 @@ console.log('Super Agent — Fuses (type "exit" to quit)');
 console.log("快捷命令：");
 console.log("  /context    — 终端里看 context 占用矩阵（参考 Claude Code）");
 console.log("  /usage      — 累计 token 用量、cache 命中率、节省金额");
+if (loadedSkills.length > 0) {
+  console.log(`  发现 ${loadedSkills.length} 个 skill：`);
+  for (const s of loadedSkills) console.log(`    /${s.name} — ${s.description}`);
+  console.log('');
+}
 await main();
