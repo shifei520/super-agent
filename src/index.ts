@@ -27,6 +27,10 @@ import { createDashScopeEmbedder } from "./rag/embedder";
 import { createRagTools } from "./tools/rag-tools";
 import { SkillLoader } from "./skills/loader";
 import { createSkillCommands } from "./commands/skills";
+import { PluginManager } from "./plugins/manager";
+import { PluginDefinition } from "./plugins/types";
+import { supabasePlugin } from "./plugins/supabase-plugin";
+import { createPluginCommands } from "./commands/plugin";
 
 // ── SKILL ────────────────────────────────
 const skillLoader = new SkillLoader(".")
@@ -44,7 +48,11 @@ toolRegistry.register(createMemoryTool(memoryStore))
 const vectorStore = new SqliteVectorStore('knowledge.db');
 const embedFn = createDashScopeEmbedder(process.env.QWEN_API_KEY!)
 toolRegistry.register(...createRagTools(vectorStore, embedFn));
-
+// ── Plugins ────────────────────────────────
+const pluginManager = new PluginManager(toolRegistry);
+const availablePlugins = new Map<string, PluginDefinition>([
+  ['supabase', supabasePlugin],
+]);
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -97,6 +105,17 @@ const MODEL_WINDOW_TOKENS = 1000_000;
 async function main() {
   const usageTracker = new UsageTracker(".usage/today.jsonl");
   await connectMCP();
+
+  // 启动时自动加载插件
+  console.log('  加载插件...');
+  for (const [name, def] of availablePlugins) {
+    try {
+      const tools = await pluginManager.load(def);
+      console.log(`  ✓ ${name} — ${tools.length} 个工具`);
+    } catch {
+      console.log(`  ✗ ${name} — 加载失败`);
+    }
+  }
 
   const allCount = toolRegistry.getAll().length;
   const activeTools = toolRegistry.getActiveTools();
@@ -155,7 +174,12 @@ async function main() {
   // 斜杠命令分发器：命中即本地处理，不进对话历史、不调用模型。
   // 新增命令只需往 commands/ 下加 handler 并在此登记。
 
-  const dispatchCommand = createDispatcher([...contextCommands, ...memoryCommands, ...createSkillCommands(skillLoader, activeSkills),]);
+  const dispatchCommand = createDispatcher([
+    ...contextCommands,
+    ...memoryCommands,
+    ...createSkillCommands(skillLoader, activeSkills),
+    ...createPluginCommands(pluginManager, availablePlugins)
+  ]);
 
   while (true) {
     let q: string;
@@ -170,6 +194,7 @@ async function main() {
     if (!trimedQuery || trimedQuery === "exit") {
       rl.close();
       await toolRegistry.closeAllMCP();
+      await pluginManager.unloadAll()
       break;
     }
 

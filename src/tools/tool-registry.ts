@@ -50,6 +50,11 @@ export class ToolRegistry {
     });
   }
 
+  unRegister(name: string) {
+    this.discoveredTools.delete(name)
+    return this.tools.delete(name)
+  }
+
   get(name: string): ToolDefinition | undefined {
     return this.tools.get(name);
   }
@@ -97,9 +102,9 @@ export class ToolRegistry {
 
     const names = query.includes(",")
       ? q
-          .split(",")
-          .map((n) => n.trim())
-          .filter(Boolean)
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean)
       : [query];
 
     for (const name of names) {
