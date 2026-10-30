@@ -31,6 +31,20 @@ import { PluginManager } from "./plugins/manager";
 import { PluginDefinition } from "./plugins/types";
 import { supabasePlugin } from "./plugins/supabase-plugin";
 import { createPluginCommands } from "./commands/plugin";
+import { ChannelGateway } from "./channels/gateway";
+import { FeiShuChannel } from "./channels/feishu";
+// 用量控制
+const budget: BudgetState = {
+  used: 0,
+  limit: 1000000,
+};
+
+const ds = createOpenAI({
+  baseURL: "https://api.deepseek.com",
+  apiKey: process.env.DASHSCOPE_API_KEY,
+});
+
+const model = ds.chat("deepseek-flash");
 
 // ── SKILL ────────────────────────────────
 const skillLoader = new SkillLoader(".")
@@ -53,6 +67,12 @@ const pluginManager = new PluginManager(toolRegistry);
 const availablePlugins = new Map<string, PluginDefinition>([
   ['supabase', supabasePlugin],
 ]);
+// ── Channels ────────────────────────────────
+// 注意：ChannelGateway 在 main() 里构造，因为它依赖 builder / makePromptCtx。
+const feishuChannel = new FeiShuChannel({
+  appId: process.env.FEISHU_APP_ID!,
+  appSecret: process.env.FEISHU_APP_SECRET!,
+})
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -84,17 +104,6 @@ async function connectMCP() {
   }
 }
 
-const budget: BudgetState = {
-  used: 0,
-  limit: 1000000,
-};
-
-const ds = createOpenAI({
-  baseURL: "https://api.deepseek.com",
-  apiKey: process.env.DASHSCOPE_API_KEY,
-});
-
-const model = ds.chat("deepseek-flash");
 
 // /context 展示用的模型元信息
 const MODEL_ID = "deepseek-flash";
@@ -150,7 +159,7 @@ async function main() {
     console.log(`[Session] 新会话`);
   }
 
-  // Prompt Pipe 组装 system prompt
+    // Prompt Pipe 组装 system prompt
   const builder = new PromptBuilder()
     .pipe("coreRules", coreRules())
     .pipe("toolGuide", toolGuide())
@@ -168,6 +177,25 @@ async function main() {
       sessionId,
     };
   }
+
+  // 通道消息走自己的会话表（gateway.sessions），与终端 messages 无关，
+  // 所以这里单独组 ctx，不把终端的会话长度/ID 带过去。
+  const channelGateway = new ChannelGateway({
+    toolRegistry,
+    model,
+    budget,
+    buildSystem: () =>
+      builder.build({
+        toolCount: toolRegistry.getActiveTools().length,
+        deferredToolSummary: toolRegistry.getDeferredToolSummary(),
+        sessionMessageCount: 0,
+        sessionId: "channel",
+      }),
+  });
+  channelGateway.register(feishuChannel);
+  console.log('  启动 Channel...');
+  await channelGateway.startAll();
+
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(makePromptCtx());
 
@@ -195,6 +223,7 @@ async function main() {
       rl.close();
       await toolRegistry.closeAllMCP();
       await pluginManager.unloadAll()
+      await channelGateway.stopAll()
       break;
     }
 
