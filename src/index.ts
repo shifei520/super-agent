@@ -33,6 +33,8 @@ import { supabasePlugin } from "./plugins/supabase-plugin";
 import { createPluginCommands } from "./commands/plugin";
 import { ChannelGateway } from "./channels/gateway";
 import { FeiShuChannel } from "./channels/feishu";
+import { HookPipeline } from "./security/hooks";
+import { createSecurityCommands } from "./commands/security";
 // 用量控制
 const budget: BudgetState = {
   used: 0,
@@ -69,10 +71,35 @@ const availablePlugins = new Map<string, PluginDefinition>([
 ]);
 // ── Channels ────────────────────────────────
 // 注意：ChannelGateway 在 main() 里构造，因为它依赖 builder / makePromptCtx。
-const feishuChannel = new FeiShuChannel({
-  appId: process.env.FEISHU_APP_ID!,
-  appSecret: process.env.FEISHU_APP_SECRET!,
-})
+// const feishuChannel = new FeiShuChannel({
+//   appId: process.env.FEISHU_APP_ID!,
+//   appSecret: process.env.FEISHU_APP_SECRET!,
+// })
+// ── Security: Hook Pipeline ────────────────────────────────
+const hookPipeline = new HookPipeline();
+
+// // 示例 Pre Hook: 写文件前记录日志
+// hookPipeline.registerPre('audit-log', (toolName, input) => {
+//   if (toolName === 'write_file' || toolName === 'edit_file') {
+//     const path = (input as any)?.path || 'unknown';
+//     console.log(`  [audit] 文件写入操作: ${toolName} → ${path}`);
+//   }
+//   return { action: 'allow' };
+// });
+
+// // 示例 Post Hook: 给 bash 输出加时间戳
+// hookPipeline.registerPost('bash-timestamp', (toolName, _input, output) => {
+//   if (toolName === 'bash') {
+//     const timestamp = new Date().toISOString();
+//     return {
+//       action: 'modify',
+//       modifiedOutput: `[${timestamp}]\n${output}`,
+//     };
+//   }
+//   return { action: 'allow' };
+// });
+
+toolRegistry.setHookPipeline(hookPipeline);
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -159,7 +186,7 @@ async function main() {
     console.log(`[Session] 新会话`);
   }
 
-    // Prompt Pipe 组装 system prompt
+  // Prompt Pipe 组装 system prompt
   const builder = new PromptBuilder()
     .pipe("coreRules", coreRules())
     .pipe("toolGuide", toolGuide())
@@ -192,7 +219,7 @@ async function main() {
         sessionId: "channel",
       }),
   });
-  channelGateway.register(feishuChannel);
+  // channelGateway.register(feishuChannel);
   console.log('  启动 Channel...');
   await channelGateway.startAll();
 
@@ -206,7 +233,8 @@ async function main() {
     ...contextCommands,
     ...memoryCommands,
     ...createSkillCommands(skillLoader, activeSkills),
-    ...createPluginCommands(pluginManager, availablePlugins)
+    ...createPluginCommands(pluginManager, availablePlugins),
+    ...createSecurityCommands(toolRegistry, hookPipeline)
   ]);
 
   while (true) {

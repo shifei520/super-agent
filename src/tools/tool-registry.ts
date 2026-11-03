@@ -1,5 +1,8 @@
 import { jsonSchema } from "ai";
 import { MCPClient } from "./mcp-client";
+import { canUseTool, Role } from "../security/roles";
+import { classifyBashCommand } from "../security/bash-classifier";
+import { HookPipeline } from "../security/hooks";
 
 // 生产环境阈值：约 12.5k token（按 ~4 字符/token 估算），
 // 既给单文件阅读留足空间，又防止单次工具结果挤爆上下文
@@ -43,6 +46,8 @@ export class ToolRegistry {
   private waitQueue: Array<() => void> = []; // 阻塞等待中的 resolve 函数
   private mcpClients: MCPClient[] = [];
   private discoveredTools: Set<string> = new Set();
+  private currentRole: Role = 'owner' // 当前用户角色
+  private hookPipeline?: HookPipeline;
 
   register(...tools: ToolDefinition[]) {
     tools.forEach((tool) => {
@@ -61,6 +66,14 @@ export class ToolRegistry {
 
   getAll(): ToolDefinition[] {
     return [...this.tools.values()];
+  }
+
+  setRole(role: Role): void {
+    this.currentRole = role;
+  }
+
+  getRole(): Role {
+    return this.currentRole;
   }
 
   private async acquireConcurrent() {
@@ -122,6 +135,9 @@ export class ToolRegistry {
       if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
         return false;
       }
+      if (!canUseTool(this.currentRole, tool.name)) {
+        return false
+      }
       return true;
     });
   }
@@ -162,6 +178,11 @@ export class ToolRegistry {
     return { active, deferred, total: active + deferred };
   }
 
+  // ToolRegistry 新增方法
+  setHookPipeline(pipeline: HookPipeline): void {
+    this.hookPipeline = pipeline;
+  }
+
   toAISDKFormat(): Record<string, any> {
     const tools = this.getActiveTools();
     const result: Record<string, any> = {};
@@ -169,25 +190,56 @@ export class ToolRegistry {
       const isSafe = tool.isConcurrencySafe || false;
       const register = this;
 
-      const name = tool.name;
+      const toolName = tool.name;
+      const hookPipeline = this.hookPipeline
 
-      result[name] = {
-        name: name,
+      result[toolName] = {
+        name: toolName,
         inputSchema: jsonSchema(tool.parameters),
         execute: async (params: any) => {
+          if (toolName === 'bash' && params?.command) {
+            const risk = classifyBashCommand(params.command)
+            if (risk.level === 'dangerous') {
+              return `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${params.command}`;
+            }
+            if (risk.level === 'moderate') {
+              console.log(`  [安全] ⚠ ${risk.reason}: ${params.command}`);
+            }
+          }
+
+          if (hookPipeline) {
+            const preResult = await hookPipeline.runPre(toolName, params)
+            if (preResult.action === 'block') {
+              return `[Hook 拦截] ${preResult.reason || '操作被阻止'}`;
+            }
+            if (preResult.action === 'modify' && preResult.modifiedInput !== undefined) {
+              params = preResult.modifiedInput;
+            }
+          }
+
           if (isSafe) {
             await register.acquireConcurrent();
-            console.log(`  [并发] ${name} 获取共享锁`);
+            console.log(`  [并发] ${toolName} 获取共享锁`);
           } else {
             await register.acquireExclusiveLock();
-            console.log(`  [串行] ${name} 获取独占锁，等待其他工具完成`);
+            console.log(`  [串行] ${toolName} 获取独占锁，等待其他工具完成`);
           }
 
           try {
             const raw = await tool.execute(params);
             const text =
               typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
-            return truncateResult(text, tool.maxResultChars);
+            let output = truncateResult(text, tool.maxResultChars);
+
+            // Post Hook
+            if (hookPipeline) {
+              const postResult = await hookPipeline.runPost(toolName, params, output);
+              if (postResult.modifiedOutput !== undefined) {
+                output = String(postResult.modifiedOutput);
+              }
+            }
+
+            return output
           } finally {
             if (isSafe) {
               await register.releaseConcurrent();
