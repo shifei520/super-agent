@@ -212,7 +212,7 @@ export class ToolRegistry {
             if (preResult.action === 'block') {
               return `[Hook 拦截] ${preResult.reason || '操作被阻止'}`;
             }
-            if (preResult.action === 'modify' && preResult.modifiedInput !== undefined) {
+            if (preResult.modifiedInput !== undefined) {
               params = preResult.modifiedInput;
             }
           }
