@@ -1,4 +1,4 @@
-import { ToolDefinition } from "../tools/registry.js";
+import { ToolDefinition } from "../tools/tool-registry"
 
 export interface PluginConfig {
   [key: string]: string | number | boolean
