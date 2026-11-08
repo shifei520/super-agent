@@ -37,7 +37,8 @@ export const agentLoop = async (
   toolRegistry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
-  budget: BudgetState,
+  // 预算累计器。可选：不传则不做 token 预算统计，也不会因超支而强制停止。
+  budget?: BudgetState,
   // 消息索引 → 创建毫秒时间戳，供 applyDefense 的 TTL 清理判断 tool 结果新旧。
   msgTimestamps: Map<number, number> = new Map(),
   // 用量/成本累计器。可选：不传则只跑业务、不做统计。
@@ -69,7 +70,7 @@ export const agentLoop = async (
             openai: { reasoningEffort: "none" },
           },
           maxRetries: 0,
-          onError: () => {},
+          onError: () => { },
         });
 
         for await (const part of result.stream) {
@@ -239,14 +240,17 @@ export const agentLoop = async (
 
     // 更新预算：stepUsage.inputTokens 已含缓存命中的部分（inputTokens 是输入总量），
     // 这里不要再单独加 cacheReadTokens，否则重复计数。
-    const inputTokens = stepUsage?.inputTokens || 0;
-    const outputTokens = stepUsage?.outputTokens || 0;
-    budget.used += inputTokens + outputTokens;
-    const pct = Math.round((budget.used / budget.limit) * 100);
-    console.log(`\n  [Token] ${budget.used}/${budget.limit} (${pct}%)`);
-    if (budget.used >= budget.limit) {
-      console.log("\n[预算超支，强制停止]");
-      break;
+    // 没传 budget 时跳过预算统计与超支检查。
+    if (budget) {
+      const inputTokens = stepUsage?.inputTokens || 0;
+      const outputTokens = stepUsage?.outputTokens || 0;
+      budget.used += inputTokens + outputTokens;
+      const pct = Math.round((budget.used / budget.limit) * 100);
+      console.log(`\n  [Token] ${budget.used}/${budget.limit} (${pct}%)`);
+      if (budget.used >= budget.limit) {
+        console.log("\n[预算超支，强制停止]");
+        break;
+      }
     }
 
     // 没有工具调用 = 模型给出了最终回答，结束

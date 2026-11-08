@@ -7,3 +7,4 @@ app
 docs/
 knowledge.db
 .skills
+.cron

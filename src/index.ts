@@ -35,6 +35,9 @@ import { ChannelGateway } from "./channels/gateway";
 import { FeiShuChannel } from "./channels/feishu";
 import { HookPipeline } from "./security/hooks";
 import { createSecurityCommands } from "./commands/security";
+import { CronService } from "./cron/service";
+import { createCronTool } from "./tools/cron-tools";
+import { createCronCommands } from "./commands/cron";
 // 用量控制
 const budget: BudgetState = {
   used: 0,
@@ -100,6 +103,9 @@ const hookPipeline = new HookPipeline();
 // });
 
 toolRegistry.setHookPipeline(hookPipeline);
+// ── Cron Service ────────────────────────────────
+const cronService = new CronService('.')
+toolRegistry.register(createCronTool(cronService))
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -223,6 +229,29 @@ async function main() {
   console.log('  启动 Channel...');
   await channelGateway.startAll();
 
+  cronService.load();
+  cronService.setExecutor({
+    runAgentPrompt: async (prompt, timeout) => {
+      const cronMessages: ModelMessage[] = [{ role: 'user', content: prompt }];
+      const system = builder.build(makePromptCtx());
+      await agentLoop(model, toolRegistry, cronMessages, system, budget);
+      const lastMsg = cronMessages[cronMessages.length - 1];
+      if (!lastMsg) return '(无输出)';
+      if (typeof lastMsg.content === 'string') return lastMsg.content;
+      if (Array.isArray(lastMsg.content)) {
+        return lastMsg.content
+          .filter((p: any) => p.type === 'text')
+          .map((p: any) => p.text)
+          .join('') || '(无输出)';
+      }
+      return String(lastMsg.content);
+    },
+    notify: (message) => { console.log(`\n${message}`); },
+  });
+  cronService.start();
+  const cronJobs = cronService.list();
+  console.log(`  Cron: ${cronJobs.length} 个任务已加载`);
+
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(makePromptCtx());
 
@@ -234,7 +263,8 @@ async function main() {
     ...memoryCommands,
     ...createSkillCommands(skillLoader, activeSkills),
     ...createPluginCommands(pluginManager, availablePlugins),
-    ...createSecurityCommands(toolRegistry, hookPipeline)
+    ...createSecurityCommands(toolRegistry, hookPipeline),
+    ...createCronCommands(cronService)
   ]);
 
   while (true) {
@@ -249,6 +279,7 @@ async function main() {
     const trimedQuery = q.trim();
     if (!trimedQuery || trimedQuery === "exit") {
       rl.close();
+      cronService.stop()
       await toolRegistry.closeAllMCP();
       await pluginManager.unloadAll()
       await channelGateway.stopAll()
