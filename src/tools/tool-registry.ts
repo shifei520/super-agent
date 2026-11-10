@@ -34,6 +34,7 @@ export interface ToolDefinition {
   // 元数据——给 Agent Loop 做决策用
   isConcurrencySafe?: boolean; // 能否并行调用
   isReadOnly?: boolean; // 是否只读
+  isOrchestrator?: boolean; // 调度工具不占锁，实际子工具仍通过共享注册表互斥
   maxResultChars?: number; // 最大返回字符数
   shouldDefer?: boolean; // 是否延迟调用
   searchHint?: string; // 搜索提示词，帮助 ToolSearch 匹配
@@ -77,7 +78,7 @@ export class ToolRegistry {
   }
 
   private async acquireConcurrent() {
-    if (this.exclusiveLock) {
+    while (this.exclusiveLock) {
       await new Promise<void>((resolve) => this.waitQueue.push(resolve));
     }
     this.concurrencyCount++;
@@ -183,8 +184,9 @@ export class ToolRegistry {
     this.hookPipeline = pipeline;
   }
 
-  toAISDKFormat(): Record<string, any> {
-    const tools = this.getActiveTools();
+  toAISDKFormat(options: { quiet?: boolean; excludeTools?: Set<string>; allowedTools?: Set<string>; abortSignal?: AbortSignal } = {}): Record<string, any> {
+    const tools = this.getActiveTools().filter(tool =>
+      !options.excludeTools?.has(tool.name) && (!options.allowedTools || options.allowedTools.has(tool.name)));
     const result: Record<string, any> = {};
     tools.forEach((tool: ToolDefinition) => {
       const isSafe = tool.isConcurrencySafe || false;
@@ -195,45 +197,51 @@ export class ToolRegistry {
 
       result[toolName] = {
         name: toolName,
+        description: tool.description,
         inputSchema: jsonSchema(tool.parameters),
         execute: async (params: any) => {
+          options.abortSignal?.throwIfAborted();
+          if (!canUseTool(this.currentRole, toolName)) return '[拒绝执行] 当前角色无权使用此工具';
+          if (hookPipeline) {
+            const preResult = await hookPipeline.runPre(toolName, params, options.quiet)
+            if (preResult.action === 'block') {
+              return `[Hook 拦截] ${preResult.reason || '操作被阻止'}`;
+            }
+            if (preResult.modifiedInput !== undefined) params = preResult.modifiedInput;
+          }
+          // Hook 可以改写命令，因此必须检查最终真正执行的输入。
           if (toolName === 'bash' && params?.command) {
             const risk = classifyBashCommand(params.command)
             if (risk.level === 'dangerous') {
               return `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${params.command}`;
             }
-            if (risk.level === 'moderate') {
+            if (risk.level === 'moderate' && !options.quiet) {
               console.log(`  [安全] ⚠ ${risk.reason}: ${params.command}`);
             }
           }
 
-          if (hookPipeline) {
-            const preResult = await hookPipeline.runPre(toolName, params)
-            if (preResult.action === 'block') {
-              return `[Hook 拦截] ${preResult.reason || '操作被阻止'}`;
+          // 调度器等待子任务时不能持锁，否则子任务会永久等待父任务释放锁。
+          if (!tool.isOrchestrator) {
+            if (isSafe) {
+              await register.acquireConcurrent();
+              if (!options.quiet) console.log(`  [并发] ${toolName} 获取共享锁`);
+            } else {
+              await register.acquireExclusiveLock();
+              if (!options.quiet) console.log(`  [串行] ${toolName} 获取独占锁，等待其他工具完成`);
             }
-            if (preResult.modifiedInput !== undefined) {
-              params = preResult.modifiedInput;
-            }
-          }
-
-          if (isSafe) {
-            await register.acquireConcurrent();
-            console.log(`  [并发] ${toolName} 获取共享锁`);
-          } else {
-            await register.acquireExclusiveLock();
-            console.log(`  [串行] ${toolName} 获取独占锁，等待其他工具完成`);
           }
 
           try {
+            // 超时发生在排队期间时，不再启动新的有副作用操作。
+            options.abortSignal?.throwIfAborted();
             const raw = await tool.execute(params);
             const text =
-              typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
+              typeof raw === "string" ? raw : JSON.stringify(raw, null, 2) ?? '';
             let output = truncateResult(text, tool.maxResultChars);
 
             // Post Hook
             if (hookPipeline) {
-              const postResult = await hookPipeline.runPost(toolName, params, output);
+              const postResult = await hookPipeline.runPost(toolName, params, output, options.quiet);
               if (postResult.modifiedOutput !== undefined) {
                 output = String(postResult.modifiedOutput);
               }
@@ -241,10 +249,12 @@ export class ToolRegistry {
 
             return output
           } finally {
-            if (isSafe) {
-              await register.releaseConcurrent();
-            } else {
-              await register.releaseExclusiveLock();
+            if (!tool.isOrchestrator) {
+              if (isSafe) {
+                await register.releaseConcurrent();
+              } else {
+                await register.releaseExclusiveLock();
+              }
             }
           }
         },

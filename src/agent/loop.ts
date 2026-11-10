@@ -82,9 +82,9 @@ export const agentLoop = async (
             case "tool-call":
               hasToolCall = true;
               lastToolCall = { name: part.toolName, params: part.input };
-              console.log(
-                `\n  [调用工具: ${part.toolName}(${JSON.stringify(part.input)})]`,
-              );
+              if (part.toolName !== 'spawn_agent') {
+                console.log(`\n  [调用工具: ${part.toolName}(${JSON.stringify(part.input)})]`);
+              }
 
               const detection = detect(part.toolName, part.input);
               if (detection.stuck) {
@@ -102,7 +102,10 @@ export const agentLoop = async (
 
               break;
             case "tool-result":
-              console.log(`  [工具返回: ${JSON.stringify(part.output)}]`);
+              // 子任务结果保留在模型上下文中，避免在主控制台重复输出全文。
+              if (part.toolName !== 'spawn_agent') {
+                console.log(`  [工具返回: ${JSON.stringify(part.output)}]`);
+              }
               if (lastToolCall) {
                 recordResult(
                   lastToolCall.name,

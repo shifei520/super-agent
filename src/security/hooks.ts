@@ -21,13 +21,13 @@ export class HookPipeline {
     this.postHooks.push({ name, fn })
   }
 
-  async runPre(toolName: string, input: unknown): Promise<HookResult> {
+  async runPre(toolName: string, input: unknown, quiet = false): Promise<HookResult> {
     let currentInput = input
     for (const hook of this.preHooks) {
       try {
         const result = await hook.fn(toolName, currentInput)
         if (result.action === 'block') {
-          console.log(`  [hook:${hook.name}] 拦截 ${toolName}: ${result.reason}`);
+          if (!quiet) console.log(`  [hook:${hook.name}] 拦截 ${toolName}: ${result.reason}`);
           return result;
         }
         if (result.action === 'modify' && result.modifiedInput !== undefined) {
@@ -35,13 +35,13 @@ export class HookPipeline {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`  [hook:${hook.name}] pre 异常: ${msg}`);
+        if (!quiet) console.error(`  [hook:${hook.name}] pre 异常: ${msg}`);
       }
     }
     return { action: 'allow', modifiedInput: currentInput };
   }
 
-  async runPost(toolName: string, input: unknown, output: unknown): Promise<HookResult> {
+  async runPost(toolName: string, input: unknown, output: unknown, quiet = false): Promise<HookResult> {
     let currentOutput = output;
     for (const hook of this.postHooks) {
       try {
@@ -51,7 +51,7 @@ export class HookPipeline {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`  [hook:${hook.name}] post 异常: ${msg}`);
+        if (!quiet) console.error(`  [hook:${hook.name}] post 异常: ${msg}`);
       }
     }
     return { action: 'allow', modifiedOutput: currentOutput };

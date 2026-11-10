@@ -38,6 +38,11 @@ import { createSecurityCommands } from "./commands/security";
 import { CronService } from "./cron/service";
 import { createCronTool } from "./tools/cron-tools";
 import { createCronCommands } from "./commands/cron";
+import { SubAgentRegistry } from "./subagents/registry";
+import { createSpawnTool } from "./tools/spawn-tools";
+import { SpawnContext } from "./subagents/spawn";
+import { createAgentCommands } from "./commands/subagents";
+
 // 用量控制
 const budget: BudgetState = {
   used: 0,
@@ -52,7 +57,7 @@ const ds = createOpenAI({
 const model = ds.chat("deepseek-flash");
 
 // ── SKILL ────────────────────────────────
-const skillLoader = new SkillLoader(".")
+const skillLoader = new SkillLoader(".");
 const loadedSkills = skillLoader.load();
 const activeSkills = new Set<string>();
 // ── Registry ────────────────────────────────
@@ -61,16 +66,16 @@ toolRegistry.register(...allTools);
 toolRegistry.register(createToolSearchTool(toolRegistry));
 toolRegistry.register(createSkillTool(skillLoader, activeSkills));
 // ── Memory ────────────────────────────────
-const memoryStore = new MemoryStore('.')
-toolRegistry.register(createMemoryTool(memoryStore))
+const memoryStore = new MemoryStore(".");
+toolRegistry.register(createMemoryTool(memoryStore));
 // ── RAG ────────────────────────────────
-const vectorStore = new SqliteVectorStore('knowledge.db');
-const embedFn = createDashScopeEmbedder(process.env.QWEN_API_KEY!)
+const vectorStore = new SqliteVectorStore("knowledge.db");
+const embedFn = createDashScopeEmbedder(process.env.QWEN_API_KEY!);
 toolRegistry.register(...createRagTools(vectorStore, embedFn));
 // ── Plugins ────────────────────────────────
 const pluginManager = new PluginManager(toolRegistry);
 const availablePlugins = new Map<string, PluginDefinition>([
-  ['supabase', supabasePlugin],
+  ["supabase", supabasePlugin],
 ]);
 // ── Channels ────────────────────────────────
 // 注意：ChannelGateway 在 main() 里构造，因为它依赖 builder / makePromptCtx。
@@ -104,8 +109,10 @@ const hookPipeline = new HookPipeline();
 
 toolRegistry.setHookPipeline(hookPipeline);
 // ── Cron Service ────────────────────────────────
-const cronService = new CronService('.')
-toolRegistry.register(createCronTool(cronService))
+const cronService = new CronService(".");
+toolRegistry.register(createCronTool(cronService));
+// ── Sub-Agent ────────────────────────────────
+const subAgentRegistry = new SubAgentRegistry();
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -137,7 +144,6 @@ async function connectMCP() {
   }
 }
 
-
 // /context 展示用的模型元信息
 const MODEL_ID = "deepseek-flash";
 const MODEL_NAME = "DeepSeek Flash";
@@ -149,7 +155,7 @@ async function main() {
   await connectMCP();
 
   // 启动时自动加载插件
-  console.log('  加载插件...');
+  console.log("  加载插件...");
   for (const [name, def] of availablePlugins) {
     try {
       const tools = await pluginManager.load(def);
@@ -197,9 +203,9 @@ async function main() {
     .pipe("coreRules", coreRules())
     .pipe("toolGuide", toolGuide())
     .pipe("deferredTools", deferredTools())
-    .pipe('memoryContext', () => memoryStore.buildPromptSection())
-    .pipe('ragContext', ragContext(vectorStore))
-    .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
+    .pipe("memoryContext", () => memoryStore.buildPromptSection())
+    .pipe("ragContext", ragContext(vectorStore))
+    .pipe("skillContext", () => skillLoader.buildPromptSection(activeSkills))
     .pipe("sessionContext", sessionContext());
 
   function makePromptCtx(): PromptContext {
@@ -210,6 +216,17 @@ async function main() {
       sessionId,
     };
   }
+
+  function getSpawnCtx(): SpawnContext {
+    return {
+      model,
+      toolRegistry,
+      agentRegistry: subAgentRegistry,
+      buildSystem: () => builder.build(makePromptCtx()),
+      currentDepth: 0,
+    };
+  }
+  toolRegistry.register(createSpawnTool(getSpawnCtx));
 
   // 通道消息走自己的会话表（gateway.sessions），与终端 messages 无关，
   // 所以这里单独组 ctx，不把终端的会话长度/ID 带过去。
@@ -226,27 +243,31 @@ async function main() {
       }),
   });
   // channelGateway.register(feishuChannel);
-  console.log('  启动 Channel...');
+  console.log("  启动 Channel...");
   await channelGateway.startAll();
 
   cronService.load();
   cronService.setExecutor({
     runAgentPrompt: async (prompt, timeout) => {
-      const cronMessages: ModelMessage[] = [{ role: 'user', content: prompt }];
+      const cronMessages: ModelMessage[] = [{ role: "user", content: prompt }];
       const system = builder.build(makePromptCtx());
       await agentLoop(model, toolRegistry, cronMessages, system, budget);
       const lastMsg = cronMessages[cronMessages.length - 1];
-      if (!lastMsg) return '(无输出)';
-      if (typeof lastMsg.content === 'string') return lastMsg.content;
+      if (!lastMsg) return "(无输出)";
+      if (typeof lastMsg.content === "string") return lastMsg.content;
       if (Array.isArray(lastMsg.content)) {
-        return lastMsg.content
-          .filter((p: any) => p.type === 'text')
-          .map((p: any) => p.text)
-          .join('') || '(无输出)';
+        return (
+          lastMsg.content
+            .filter((p: any) => p.type === "text")
+            .map((p: any) => p.text)
+            .join("") || "(无输出)"
+        );
       }
       return String(lastMsg.content);
     },
-    notify: (message) => { console.log(`\n${message}`); },
+    notify: (message) => {
+      console.log(`\n${message}`);
+    },
   });
   cronService.start();
   const cronJobs = cronService.list();
@@ -264,7 +285,8 @@ async function main() {
     ...createSkillCommands(skillLoader, activeSkills),
     ...createPluginCommands(pluginManager, availablePlugins),
     ...createSecurityCommands(toolRegistry, hookPipeline),
-    ...createCronCommands(cronService)
+    ...createCronCommands(cronService),
+    ...createAgentCommands(subAgentRegistry)
   ]);
 
   while (true) {
@@ -279,15 +301,14 @@ async function main() {
     const trimedQuery = q.trim();
     if (!trimedQuery || trimedQuery === "exit") {
       rl.close();
-      cronService.stop()
+      cronService.stop();
       await toolRegistry.closeAllMCP();
-      await pluginManager.unloadAll()
-      await channelGateway.stopAll()
+      await pluginManager.unloadAll();
+      await channelGateway.stopAll();
       break;
     }
 
     const SYSTEM = builder.build(makePromptCtx());
-
 
     // 斜杠命令：交给命令分发器，命中即本地处理，continue 下一轮
     if (trimedQuery.startsWith("/")) {
@@ -353,7 +374,8 @@ console.log("  /context    — 终端里看 context 占用矩阵（参考 Claude
 console.log("  /usage      — 累计 token 用量、cache 命中率、节省金额");
 if (loadedSkills.length > 0) {
   console.log(`  发现 ${loadedSkills.length} 个 skill：`);
-  for (const s of loadedSkills) console.log(`    /${s.name} — ${s.description}`);
-  console.log('');
+  for (const s of loadedSkills)
+    console.log(`    /${s.name} — ${s.description}`);
+  console.log("");
 }
 await main();
