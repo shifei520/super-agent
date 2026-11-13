@@ -7,7 +7,10 @@ import {
   resetHistory,
 } from "./loop-detection.js";
 import { isRetryable, calculateDelay, sleep } from "./retry.js";
-import { MODEL_CONTEXT_WINDOW } from "../context/config.js";
+import {
+  getContextWindow,
+  openAICompatProviderOptions,
+} from "../context/config.js";
 import { microcompact, summarize } from "../context/compressor.js";
 import { applyDefense } from "../context/defense.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
@@ -65,10 +68,8 @@ export const agentLoop = async (
           messages,
           tools: toolRegistry.toAISDKFormat(),
           // DeepSeek V4 的 thinking 模式默认开启，且带 tools 时要求回传 reasoning_content，
-          // 而 @ai-sdk/openai 不支持该字段 → 直接禁用 thinking 规避 400
-          providerOptions: {
-            openai: { reasoningEffort: "none" },
-          },
+          // 而 @ai-sdk/openai 不支持该字段 → 由 config.model.disableReasoning 统一控制
+          providerOptions: openAICompatProviderOptions(),
           maxRetries: 0,
           onError: () => { },
         });
@@ -187,15 +188,14 @@ export const agentLoop = async (
     // 最后一步的 inputTokens 反映"本次请求发送时"的上下文大小，用它判断
     // "下一步是否需要先压缩再发送"。上下文单调增长、每步重新判断，故一个 step 的
     // 统计滞后可接受（阈值已留 20% 缓冲）。
-    const compressAt = Math.floor(
-      MODEL_CONTEXT_WINDOW * COMPRESS_THRESHOLD_RATIO,
-    );
+    const contextWindow = getContextWindow();
+    const compressAt = Math.floor(contextWindow * COMPRESS_THRESHOLD_RATIO);
     const summarizeAt = Math.floor(
-      MODEL_CONTEXT_WINDOW * SUMMARIZE_THRESHOLD_RATIO,
+      contextWindow * SUMMARIZE_THRESHOLD_RATIO,
     );
     const contextTokens = stepsResult.at(-1)?.usage.inputTokens ?? 0;
     console.log(
-      `  [上下文] 真实输入 ${contextTokens} tokens / 窗口 ${MODEL_CONTEXT_WINDOW} (micro@${compressAt}, summary@${summarizeAt}) · 计费 ${describePricing(model.modelId)}`,
+      `  [上下文] 真实输入 ${contextTokens} tokens / 窗口 ${contextWindow} (micro@${compressAt}, summary@${summarizeAt}) · 计费 ${describePricing(model.modelId)}`,
     );
 
     // Layer 1: microcompact（零成本，优先执行）
@@ -214,7 +214,7 @@ export const agentLoop = async (
     // Layer 2 自然不再触发——用真实值做级联，无需对 micro 的效果做本地近似。
     if (contextTokens > summarizeAt) {
       console.log(
-        `  [压缩·summary] 输入 ${contextTokens} tokens 超过窗口 ${Math.round(SUMMARIZE_THRESHOLD_RATIO * 100)}%，触发 LLM 摘要...`,
+        `  [压缩·summary] 输入 ${contextTokens} tokens 超过窗口 ${Math.round(SUMMARIZE_THRESHOLD_RATIO * 100)}% (${summarizeAt})，触发 LLM 摘要...`,
       );
       const result = await summarize(model, messages);
       if (result.compressedCount > 0) {

@@ -2,10 +2,12 @@
   "name": "super-agent",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "config:init": "tsx src/index.ts init",
+    "continue": "tsx src/index.ts --continue",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -28,7 +30,8 @@
     "dotenv": "^17.4.2",
     "fast-glob": "^3.3.3",
     "sqlite-vec": "^0.1.9",
-    "turndown": "^7.2.4"
+    "turndown": "^7.2.4",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

@@ -1,4 +1,5 @@
 import { ModelMessage, streamText } from "ai";
+import { openAICompatProviderOptions } from "../context/config";
 import { ToolRegistry } from "../tools/tool-registry";
 import { SubAgentRegistry } from "./registry";
 import { SpawnRequest, SubAgentRun } from "./types";
@@ -80,11 +81,9 @@ export async function spawnAgent(
           abortSignal: ac.signal,
         }),
         toolChoice: isLastStep ? "none" : "auto",
-        // DeepSeek V4 的 thinking 模式默认开启，且带 tools 时要求回传 reasoning_content，
-        // 而 @ai-sdk/openai 不支持该字段 → 直接禁用 thinking 规避 400
-        providerOptions: {
-          openai: { reasoningEffort: "none", parallelToolCalls: true },
-        },
+        // DeepSeek 的 thinking 模式与 @ai-sdk/openai 不兼容，由 config 控制是否关闭；
+        // 子 Agent 固定开启并行工具调用
+        providerOptions: openAICompatProviderOptions({ parallelToolCalls: true }),
         maxRetries: 0,
         onError: () => {},
         abortSignal: ac.signal,

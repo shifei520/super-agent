@@ -1,8 +1,13 @@
 import { CommandHandler } from ".";
 import { PluginManager } from "../plugins/manager";
 import { PluginDefinition } from "../plugins/types";
+import type { PluginConfigEntry } from "../config/schema";
 
-export function createPluginCommands(pluginManager: PluginManager, availablePlugins: Map<string, PluginDefinition>): CommandHandler[] {
+export function createPluginCommands(
+  pluginManager: PluginManager,
+  availablePlugins: Map<string, PluginDefinition>,
+  configuredPlugins: PluginConfigEntry[] = [],
+): CommandHandler[] {
   return [
     // /plugin 或 /plugin list
     (cmd, ctx) => {
@@ -45,7 +50,9 @@ export function createPluginCommands(pluginManager: PluginManager, availablePlug
         return true;
       }
 
-      pluginManager.load(def).then(tools => {
+      // 运行时加载也要带上配置里的密钥/参数，否则插件会退化成 Mock 模式
+      const config = configuredPlugins.find((p) => p.name === name)?.config;
+      pluginManager.load(def, config).then(tools => {
         console.log(`\n[plugins] 已加载 ${name}，注册了 ${tools.length} 个工具：`);
         for (const t of tools) console.log(`    ${t}`);
         console.log('');

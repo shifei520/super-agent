@@ -3,7 +3,7 @@ import {
   textToolResultTool,
   toolResultOutputToText,
 } from "./tool-result-output";
-import { MODEL_CONTEXT_WINDOW } from "./config";
+import { getContextWindow } from "./config";
 
 function countMessageChars(message: ModelMessage): number {
   let chars = 0;
@@ -73,14 +73,17 @@ interface TruncationConfig {
   contextBudgetChars: number;
 }
 
-const DEFAULT_TRUNCATION: TruncationConfig = {
-  maxSingleResult: MODEL_CONTEXT_WINDOW * 0.5 * 2, // 50% 窗口，2 chars/token
-  contextBudgetChars: MODEL_CONTEXT_WINDOW * 0.75 * 4, // 75% 窗口，4 chars/token
+const defaultTruncation = (): TruncationConfig => {
+  const window = getContextWindow();
+  return {
+    maxSingleResult: window * 0.5 * 2, // 50% 窗口，2 chars/token
+    contextBudgetChars: window * 0.75 * 4, // 75% 窗口，4 chars/token
+  };
 };
 
 export function truncateToolResults(
   messages: ModelMessage[],
-  config = DEFAULT_TRUNCATION,
+  config = defaultTruncation(),
 ): { messages: ModelMessage[]; truncated: number; compacted: number } {
   let truncated = 0;
   let compacted = 0;

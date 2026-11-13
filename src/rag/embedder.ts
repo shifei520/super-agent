@@ -19,9 +19,15 @@ export function createDashScopeEmbedder(apiKey: string): EmbeddingFn {
         }),
       },
     );
-    const data = await resp.json() as any;
-    return data.data.map((d: any) => d.embedding as number[]);
-  }
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw new Error(
+        `Embedding 请求失败 (${resp.status} ${resp.statusText}): ${body.slice(0, 300)}`,
+      );
+    }
+    const { data } = (await resp.json()) as { data: Array<{ embedding: number[] }> };
+    return data.map((item) => item.embedding);
+  };
 }
 
 const embedCache = new Map<string, number[]>()
